@@ -94,11 +94,12 @@ SUM_COLS = ['selling_price', 'quantity', 'w_sp', 'w_qty']
 
 
 def _aggregate(raw):
+    # No cleaning here (no strip / NaN->str): prepare_data does it exactly as before.
     raw = raw.copy()
-    for c in GROUP_COLS:  # plain strings so files with different categories concat cleanly
-        raw[c] = raw[c].astype(str).str.strip()
+    for c in GROUP_COLS:  # category -> object so files concat cleanly
+        raw[c] = raw[c].astype(object)
     raw['rows'] = 1
-    return raw.groupby(GROUP_COLS, as_index=False)[SUM_COLS + ['rows']].sum()
+    return raw.groupby(GROUP_COLS, as_index=False, dropna=False, observed=True)[SUM_COLS + ['rows']].sum()
 
 
 @st.cache_data(show_spinner="Fetching RI files from Google Drive...", ttl=600)
