@@ -81,6 +81,26 @@ def download_file_to_disk(service, file_id, suffix):
     return path
 
 
+# Memory: only these columns are read, and each file is pre-aggregated to the
+# grain the dashboard needs (sums are additive, so results are unchanged).
+NEEDED_COLS = ['month', 'return_warehouse', 'product_categorization_dim_business_unit',
+               'Alpha_flag', 'return_type', 'selling_price', 'quantity', 'w_sp', 'w_qty']
+READ_DTYPES = {'month': 'category', 'return_warehouse': 'category',
+               'product_categorization_dim_business_unit': 'category',
+               'Alpha_flag': 'category', 'return_type': 'category'}
+GROUP_COLS = ['month', 'return_warehouse', 'product_categorization_dim_business_unit',
+              'Alpha_flag', 'return_type']
+SUM_COLS = ['selling_price', 'quantity', 'w_sp', 'w_qty']
+
+
+def _aggregate(raw):
+    raw = raw.copy()
+    for c in GROUP_COLS:  # plain strings so files with different categories concat cleanly
+        raw[c] = raw[c].astype(str).str.strip()
+    raw['rows'] = 1
+    return raw.groupby(GROUP_COLS, as_index=False)[SUM_COLS + ['rows']].sum()
+
+
 @st.cache_data(show_spinner="Fetching RI files from Google Drive...", ttl=600)
 def fetch_and_combine_from_drive(folder_id):
     service = get_drive_service()
@@ -95,9 +115,11 @@ def fetch_and_combine_from_drive(folder_id):
         path = download_file_to_disk(service, f["id"], suffix)
         try:
             if suffix == ".csv":
-                frames.append(pd.read_csv(path, low_memory=False))
+                raw = pd.read_csv(path, usecols=NEEDED_COLS, dtype=READ_DTYPES)
             else:
-                frames.append(pd.read_excel(path))
+                raw = pd.read_excel(path, usecols=NEEDED_COLS)
+            frames.append(_aggregate(raw))  # shrink per file; never hold all raw rows
+            del raw
             names.append(f["name"])
         finally:
             os.remove(path)
@@ -113,7 +135,6 @@ def fetch_and_combine_from_drive(folder_id):
 def prepare_data(df):
     df = df.copy()
     df['month'] = df['month'].astype(str).str.strip().str.title()
-    df['week'] = df['week'].astype(str).str.strip()
     df['zone'] = df['return_warehouse'].map(ZONE_MAPPING).fillna('Unknown')
 
     if 'product_categorization_dim_business_unit' in df.columns:
@@ -174,7 +195,7 @@ def build_payload(df):
             "months": months_present,
             "zones": zones_present,
             "warehouses": warehouses_present,
-            "row_count": int(len(df)),
+            "row_count": int(df['rows'].sum()),
         },
         "rto": _granular(df_rto, 'selling_price', 'w_sp'),
         "rvp": _granular(df_rvp, 'quantity', 'w_qty'),
