@@ -146,6 +146,10 @@ def prepare_data(df):
     exclusions_lower = [bu.lower().strip() for bu in BU_EXCLUSIONS]
     df = df[~df['product_categorization_dim_business_unit'].str.lower().isin(exclusions_lower)].copy()
 
+    # Drop Unknown zone and Unknown business unit rows
+    df = df[(df['zone'] != 'Unknown') &
+            (df['product_categorization_dim_business_unit'].str.lower() != 'unknown')].copy()
+
     df['cleaned_flag'] = pd.to_numeric(df['Alpha_flag'], errors='coerce').fillna(-1).astype(int).astype(str)
     df['cleaned_return_type'] = df['return_type'].astype(str).str.lower().str.strip()
     df['cleaned_bu'] = df['product_categorization_dim_business_unit'].str.lower()
@@ -334,14 +338,14 @@ tbody tr:hover{background:#f8fafc; cursor:pointer;}
 
     <section>
       <div class="shead"><span class="n">1</span><h2>Zone-wise, month on month</h2>
-        <span class="h">RI% weighted by loss ÷ value, respects Business Unit and Warehouse filters</span></div>
+        <span class="h">RI% weighted by loss ÷ value, respects Month, Business Unit and Warehouse filters</span></div>
       <div class="card"><div class="tscroll"><table id="zoneTable"><thead></thead><tbody></tbody></table></div></div>
     </section>
 
     <div class="split">
       <section>
         <div class="shead"><span class="n">2</span><h2>Site-wise, month on month</h2>
-          <span class="h">Click a row to focus the panel on the right</span></div>
+          <span class="h">Click a row to filter the whole dashboard to that site (Overall to reset)</span></div>
         <div class="card"><div class="tscroll"><table id="siteTable"><thead></thead><tbody></tbody></table></div></div>
       </section>
 
@@ -438,12 +442,13 @@ function switchMetric(m){
 }
 
 function renderKPIs(){
-  const months = DATA.meta.months;
+  const months = state.month.size ? DATA.meta.months.filter(m=>state.month.has(m)) : DATA.meta.months;
+  const whSel = document.getElementById("f-wh").value;
   const lastMonth = months[months.length-1];
   const prevMonth = months.length>1 ? months[months.length-2] : null;
 
-  const rtoAll = excludeHiddenBU(applyFilters(DATA.rto, {bu:new Set(), month:new Set(), wh:"All"}));
-  const rvpAll = excludeHiddenBU(applyFilters(DATA.rvp, {bu:new Set(), month:new Set(), wh:"All"}));
+  const rtoAll = excludeHiddenBU(applyFilters(DATA.rto, {bu:state.bu, month:new Set(), wh:whSel}));
+  const rvpAll = excludeHiddenBU(applyFilters(DATA.rvp, {bu:state.bu, month:new Set(), wh:whSel}));
   const rtoVal = ri(rtoAll.filter(r=>r.month===lastMonth));
   const rvpVal = ri(rvpAll.filter(r=>r.month===lastMonth));
   const rtoPrev = prevMonth ? ri(rtoAll.filter(r=>r.month===prevMonth)) : undefined;
@@ -477,7 +482,7 @@ function renderKPIs(){
 
 function render(){
   const wh = document.getElementById("f-wh").value;
-  if (wh !== "All") selectedSite = wh;
+  selectedSite = wh;  // top Warehouse filter drives every section
   const months = state.month.size ? DATA.meta.months.filter(m=>state.month.has(m)) : DATA.meta.months;
   const allRecords = DATA[metric] || [];
 
@@ -485,7 +490,7 @@ function render(){
 
   // Scope now reflects Month + BU only — Warehouse selection no longer hides rows,
   // it only steers which site the right-hand panel focuses on.
-  const scopeRecords = applyFilters(allRecords, {bu:state.bu, month:state.month, wh:"All"});
+  const scopeRecords = applyFilters(allRecords, {bu:state.bu, month:state.month, wh:wh});
   document.getElementById("subline").innerText =
     `${DATA.meta.row_count.toLocaleString()} rows · ${DATA.meta.months.length} months (${DATA.meta.months.join(", ")}) · ${DATA.meta.zones.length} zones`;
   document.getElementById("scope").innerHTML =
@@ -495,7 +500,7 @@ function render(){
 
 
   // --- Section 1: Zone-wise, month on month (Month + BU filters only) ---
-  const zoneFiltered = applyFilters(allRecords, {bu:state.bu, month:new Set(), wh:"All"});
+  const zoneFiltered = applyFilters(allRecords, {bu:state.bu, month:new Set(), wh:wh});
   const zoneThead = document.querySelector("#zoneTable thead");
   const zoneTbody = document.querySelector("#zoneTable tbody");
   zoneThead.innerHTML = "<tr><th>Zone</th>" + months.map(m=>`<th>${m}</th>`).join("") + (months.length>1?"<th>MoM</th>":"") + "</tr>";
@@ -526,11 +531,11 @@ function render(){
   zoneTbody.innerHTML = zoneOverallRow + zoneRows;
 
   // --- Section 2: Site-wise, month on month (Month + BU filters only — always shows ALL sites) ---
-  const siteFiltered = applyFilters(allRecords, {bu:state.bu, month:new Set(), wh:"All"});
+  const siteFiltered = applyFilters(allRecords, {bu:state.bu, month:new Set(), wh:wh});
   const siteThead = document.querySelector("#siteTable thead");
   const siteTbody = document.querySelector("#siteTable tbody");
   siteThead.innerHTML = "<tr><th>Warehouse</th>" + months.map(m=>`<th>${m}</th>`).join("") + "</tr>";
-  const siteRows = visibleWarehouses.map(s => {
+  const siteRows = visibleWarehouses.filter(s => wh==="All" || s===wh).map(s => {
     const zoneOf = (siteFiltered.find(r=>r.wh===s) || {}).zone || "";
     const cells = months.map(m => pctCell(metric, ri(siteFiltered.filter(r=>r.wh===s && r.month===m)))).join("");
     const sel = s === selectedSite ? "selected" : "";
@@ -541,8 +546,8 @@ function render(){
   // --- Section 3: BU breakdown for the currently focused site ---
   const siteLabel = selectedSite === "All" ? "all sites" : selectedSite;
   document.getElementById("buPanelTitle").innerText = `Business unit breakdown — ${siteLabel}`;
-  const buRecords = applyFilters(allRecords, {bu:new Set(), month:new Set(), wh:selectedSite});
-  const bus = visibleBUs(metric === "rto" ? DATA.rto_bus : DATA.rvp_bus);
+  const buRecords = applyFilters(allRecords, {bu:state.bu, month:new Set(), wh:selectedSite});
+  const bus = visibleBUs(metric === "rto" ? DATA.rto_bus : DATA.rvp_bus).filter(b => state.bu.size===0 || state.bu.has(b));
   const buThead = document.querySelector("#buTable thead");
   const buTbody = document.querySelector("#buTable tbody");
   buThead.innerHTML = "<tr><th>Business unit</th>" + months.map(m=>`<th>${m}</th>`).join("") + "</tr>";
