@@ -5,9 +5,9 @@ Data source: Google Drive folder (all .xlsx / .csv files combined, like the
 original local ri_dashboard_streamlit.py script).
 """
 import io
-import json
-import os
-import tempfile
+import json.
+import o;
+import tempfile;
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
